@@ -1,0 +1,1316 @@
+/**
+ * Sensor Health Pro
+ */
+
+definition(
+    name: "Sensor Health Pro",
+    namespace: "ShaneAllen",
+    author: "ShaneAllen",
+    description: "The most powerful device health monitor. Features Auto-Healing, Modal-Based Groups, and Health Scores.",
+    category: "System",
+    iconUrl: "",
+    iconX2Url: "",
+    oauth: true,
+    singleInstance: true
+)
+
+preferences {
+    page(name: "mainPage")
+    page(name: "settingsPage")
+    page(name: "detailsPage")
+}
+
+mappings {
+    path("/ui") { action: [GET: "serveApp"] }
+    path("/api/data") { action: [GET: "serveApiData"] }
+    path("/api/cmd/:type/:id/:val") { action: [GET: "handleApiCommand"] }
+    path("/api/users") { action: [GET: "serveUsers"] }
+}
+
+// =======================================================================================
+// SYSTEM HELPERS
+// =======================================================================================
+
+def getSafeHubUID() { 
+    if(settings.manualHubID) return settings.manualHubID
+    try { return location.hubs[0].id } catch(e){ return "0" } 
+}
+
+def getCloudAppEndpointUrl() {
+    if(!state.accessToken || !app.id) return ""
+    return "${getApiServerUrl()}/${getSafeHubUID()}/apps/${app.id}/ui?access_token=${state.accessToken}"
+}
+
+def getLocalAppEndpointUrl() {
+    if(!state.accessToken || !app.id) return ""
+    return "${getFullLocalApiServerUrl()}/apps/${app.id}/ui?access_token=${state.accessToken}"
+}
+
+// =======================================================================================
+// PREFERENCES
+// =======================================================================================
+
+def mainPage() {
+    if (!state.accessToken) try { createAccessToken() } catch (e) { log.warn "OAuth Error: $e" }
+    
+    dynamicPage(name: "mainPage", title: "Sensor Health Pro", install: true, uninstall: true) {
+        section {
+            paragraph """<div style='background:linear-gradient(90deg, #FF6B6B 0%, #FF8E53 100%); padding:25px; border-radius:10px; color:white; text-align:center; margin-bottom:15px;'>
+                <h1 style='margin:0; text-shadow: 0 2px 4px rgba(0,0,0,0.1);'>🏥 SENSOR HEALTH PRO</h1>
+                <div style='font-size:1.1em; opacity:0.9;'>V8.4: Chicken Advisor Edition</div></div>"""
+        }
+        
+        section("<b>WEB DASHBOARD LINKS</b>") {
+            if (state.accessToken) {
+                def cloudLink = getCloudAppEndpointUrl()
+                def localLink = getLocalAppEndpointUrl()
+                
+                paragraph """<div style='display:flex; gap:10px;'>
+                    <a href='${localLink}' target='_blank' style='flex:1; text-align:center; padding:15px; background:#f1f5f9; color:#334155; border-radius:8px; font-weight:bold; text-decoration:none; border:1px solid #ccc;'>🏠 Local Link</a>
+                    <a href='${cloudLink}' target='_blank' style='flex:1; text-align:center; padding:15px; background:#3498db; color:white; border-radius:8px; font-weight:bold; text-decoration:none;'>☁️ Cloud Link</a>
+                </div>"""
+            } else {
+                paragraph "⚠️ Please enable OAuth in App Code settings."
+            }
+        }
+        
+        section("<b>ADMIN TOOLS</b>") {
+            paragraph "Use these tools to verify connections and sync data."
+            input "btnSyncUsers", "button", title: "👥 Sync Users from Family Pulse", width: 6
+            input "btnTestReward", "button", title: "🏆 Test Reward (Send to User 1)", width: 6
+            input "btnTestInt", "button", title: "🧪 Test All Integrations", width: 12
+           
+            if(state.adminMsg) paragraph "<div style='background:#e8f5e9; color:#2e7d32; padding:10px; border-radius:5px; border:1px solid #c8e6c9;'>${state.adminMsg}</div>"
+        }
+        
+        section("<b>CONFIGURATION</b>") {
+            href "settingsPage", title: "⚙️ 1. Devices & Logic", description: "Select devices, ghost thresholds, and alerts."
+            href "detailsPage", title: "📝 2. Management & Details", description: "Set battery types and 'Replaced Date'."
+        }
+    }
+}
+
+def settingsPage() {
+    dynamicPage(name: "settingsPage", title: "Settings", install: false, uninstall: false, nextPage: "mainPage") {
+        
+        section("<b>🔋 Power Monitoring (Catch-All)</b>") {
+            input "battDevices", "capability.battery", title: "All Battery Devices", multiple: true
+            input "battLow", "number", title: "Low Battery Threshold (%)", defaultValue: 20
+            input "battCrit", "number", title: "Critical Battery Threshold (%)", defaultValue: 10
+        }
+
+        section("<b>🩹 Self-Healing & Ghosts</b>") {
+            input "autoHeal", "bool", title: "Enable Auto-Healing?", defaultValue: true, description: "If device is offline, automatically attempt refresh once every 12h."
+            input "ghostHours", "number", title: "Ghost Threshold (Hours)", defaultValue: 12, description: "If Open/Active > this time, flag as Ghost."
+            input "actDevices", "capability.sensor", title: "Activity Check Devices", multiple: true
+            input "actHours", "number", title: "Offline Threshold (Hours)", defaultValue: 24
+            input "warnSignal", "bool", title: "Show Warning for Weak Signal (RSSI < -85)?", defaultValue: true
+        }
+        
+        section("<b>📂 Specific Sensor Groups</b>") {
+            input "grpPlug", "capability.outlet", title: "🔌 Smart Plugs", multiple: true
+            input "grpSwitch", "capability.switch", title: "💡 Smart Switches", multiple: true
+            input "grpSmoke", "capability.smokeDetector", title: "🔥 Smoke & CO", multiple: true
+            input "grpLock", "capability.lock", title: "🔒 Locks", multiple: true
+            input "grpWater", "capability.waterSensor", title: "💧 Leak Sensors", multiple: true
+            input "grpContact", "capability.contactSensor", title: "🚪 Doors & Windows", multiple: true
+            input "grpMotion", "capability.motionSensor", title: "🏃 Motion Sensors", multiple: true
+            input "grpTemp", "capability.temperatureMeasurement", title: "🌡️ Climate Sensors", multiple: true
+            input "grpButton", "capability.pushableButton", title: "🔘 Buttons & Remotes", multiple: true
+            input "grpPres", "capability.presenceSensor", title: "📍 Presence Fobs", multiple: true
+        }
+
+        section("<b>🔗 Integrations</b>") {
+            input "familyPulseApp", "text", title: "Family Pulse App ID", required: false
+            input "familyPulseToken", "text", title: "Family Pulse Token", required: false
+            input "hiddenUsers", "text", title: "Hide User IDs (CSV)", description: "Enter IDs to hide from list (e.g. 101, 102)", required: false
+            
+            input "calendarAppId", "text", title: "Family Calendar App ID", required: false
+            input "calendarToken", "text", title: "Family Calendar Token", required: false
+            input "familyHubAppId", "text", title: "Family Hub App ID", required: false
+            input "familyHubToken", "text", title: "Family Hub Token", required: false
+        }
+
+        section("<b>🚨 Notifications</b>") {
+            input "notifyDev", "capability.notification", title: "Send Push Notification", multiple: true
+            input "ttsDev", "capability.speechSynthesis", title: "Speak on Speakers", multiple: true
+        }
+        
+        section("<b>⚙️ System</b>") {
+            input "manualHubID", "text", title: "Manual Hub ID (Optional)"
+        }
+    }
+}
+
+def detailsPage() {
+    dynamicPage(name: "detailsPage", title: "Device Details", install: false, uninstall: false, nextPage: "mainPage") {
+        section("<b>📝 Device Metadata</b>") {
+            def allDevs = getAllDevices()
+            allDevs.sort { it.displayName }
+            allDevs.each { dev ->
+                paragraph "<div style='background:#f1f5f9; padding:5px 10px; border-radius:5px; font-weight:bold; margin-top:10px; border-left:3px solid #FF6B6B;'>${dev.displayName}</div>"
+                input "desc_${dev.id}", "text", title: "📍 Location", width: 6
+                input "battType_${dev.id}", "enum", title: "🔋 Type", options: ["AA", "AAA", "CR2032", "CR2450", "CR123A", "9V", "18650", "Rechargeable", "Other"], width: 3
+                input "battQty_${dev.id}", "number", title: "Qty", width: 3
+                input "date_${dev.id}", "text", title: "📅 Last Replaced (YYYY-MM-DD)", width: 12
+                input "user_${dev.id}", "text", title: "👤 Replaced By", width: 12
+            }
+        }
+    }
+}
+
+def getAllDevices() {
+    def list = []
+    [settings.battDevices, settings.actDevices, settings.grpContact, settings.grpMotion, settings.grpWater, settings.grpTemp, settings.grpLock, settings.grpSmoke, settings.grpButton, settings.grpPres, settings.grpPlug, settings.grpSwitch].each { 
+        if(it) list.addAll(it) 
+    }
+    return list.unique { it.id }
+}
+
+def appButtonHandler(btn) {
+    if(btn == "btnSyncUsers") {
+        if(settings.familyPulseApp && settings.familyPulseToken) {
+            def res = syncPulseUsers()
+            state.adminMsg = res ?: "⚠️ No result from sync."
+        } else {
+            state.adminMsg = "⚠️ Please configure Family Pulse App ID and Token first."
+        }
+    }
+    
+    // TEST REWARD BUTTON
+    if(btn == "btnTestReward") {
+        if(settings.familyPulseApp && settings.familyPulseToken) {
+            def desc = URLEncoder.encode("Test Reward", "UTF-8")
+            def url = "http://127.0.0.1:8080/apps/api/${settings.familyPulseApp}/cmd/reward?access_token=${settings.familyPulseToken}&uid=1&xp=10&coins=10&title=Test+Success&sub=System+Test"
+            try { 
+                httpGet(url) { } 
+                state.adminMsg = "✅ Test Reward Sent to User ID 1 (+10 XP/Coins)"
+            } catch(e) { 
+                state.adminMsg = "❌ Test Reward Failed: ${e}" 
+            }
+        } else {
+            state.adminMsg = "⚠️ Configure Pulse App ID/Token first."
+        }
+    }
+    
+    if(btn == "btnTestInt") {
+        def msg = []
+        if(settings.calendarAppId && settings.calendarToken) {
+            def item = URLEncoder.encode("TEST BATTERY", "UTF-8")
+            def url = "http://127.0.0.1:8080/apps/api/${settings.calendarAppId}/cmd/grocery/add?access_token=${settings.calendarToken}&item=${item}&store=Other&authorName=SensorHealth&authorAvatar=🧪"
+            try { 
+                httpGet(url) { } 
+                msg << "Calendar: ✅ OK"
+            } catch(e) { 
+                msg << "Calendar: ❌ Fail" 
+            }
+        } else { msg << "Calendar: ⚪ N/A" }
+
+        if(settings.familyPulseApp && settings.familyPulseToken) {
+            def desc = URLEncoder.encode("Integration Test", "UTF-8")
+            def url = "http://127.0.0.1:8080/apps/api/${settings.familyPulseApp}/cmd/reward?access_token=${settings.familyPulseToken}&uid=1&xp=5&coins=5&title=${desc}&sub=Test"
+            try { 
+                httpGet(url) { } 
+                msg << "Pulse: ✅ OK"
+            } catch(e) { 
+                msg << "Pulse: ❌ Fail" 
+            }
+        } else { msg << "Pulse: ⚪ N/A" }
+        
+        state.adminMsg = msg.join(" | ")
+    }
+}
+
+// =======================================================================================
+// LOGIC ENGINE
+// =======================================================================================
+
+def installed() { initialize() }
+def updated() { initialize() }
+def initialize() {
+    if(settings.notifyDev || settings.ttsDev) {
+        schedule("0 0 10 * * ?", dailyHealthCheck) 
+    }
+    
+    // AUTOMATIC SYNC: 1st of every month at 4 AM
+    if(settings.familyPulseApp && settings.familyPulseToken) {
+        schedule("0 0 4 1 * ?", syncPulseUsers)
+    }
+    
+    if(state.healHistory == null) state.healHistory = [:]
+    if(state.battSnapshot == null) state.battSnapshot = [:]
+    state.remove("adminMsg") 
+}
+
+def syncPulseUsers() {
+    if(settings.familyPulseApp && settings.familyPulseToken) {
+        def url = "http://127.0.0.1:8080/apps/api/${settings.familyPulseApp}/api/data?access_token=${settings.familyPulseToken}&uid=1"
+        try {
+            httpGet(url) { resp ->
+                if(resp.data && resp.data.users) {
+                    def cleanUsers = []
+                    resp.data.users.each { u ->
+                        cleanUsers << [id: u.id, name: u.name.toString(), avatar: u.avatar ? u.avatar.toString() : ""]
+                    }
+                    state.cachedUsers = cleanUsers
+                    log.info "SensorHealth: Automatically synced ${cleanUsers.size()} users from Family Pulse."
+                    return "✅ Synced ${cleanUsers.size()} users."
+                }
+            }
+        } catch(e) {
+            log.warn "SensorHealth: Auto-Sync Failed: ${e.message}"
+            return "❌ Sync Failed."
+        }
+    }
+}
+
+def dailyHealthCheck() {
+    def result = getDeviceHealth(true) 
+    if(result.totalIssues > 0) {
+        def msg = "Sensor Health Alert: ${result.totalIssues} devices need attention."
+        if(settings.notifyDev) settings.notifyDev.deviceNotification(msg)
+        if(settings.ttsDev) settings.ttsDev.speak(msg)
+    }
+}
+
+def getDeviceHealth(isDaily = false) {
+    def healthData = [ critical: [], groups: [], report: [:] ]
+    def totalIssues = 0
+    def battLowVal = settings.battLow ?: 20
+    def battCritVal = settings.battCrit ?: 10
+    def actHoursVal = settings.actHours ?: 24
+    def ghostHoursVal = settings.ghostHours ?: 12
+    def warnSig = settings.warnSignal
+    def autoHeal = settings.autoHeal
+    def nowTime = new Date().time
+    
+    // Clean Snoozed
+    if(state.dismissed) state.dismissed = state.dismissed.findAll { it.value > nowTime }
+    if(state.healHistory == null) state.healHistory = [:]
+    if(state.battSnapshot == null) state.battSnapshot = [:]
+    
+    def totalSignal = 0; def signalCount = 0; def battIssues = 0; def offlineCount = 0
+    def claimedIds = []
+
+    def checkGroup = { devList, groupName, groupIcon ->
+        def groupItems = []
+        def groupIssues = 0
+        
+        if(devList) {
+            devList.each { dev ->
+                if(!claimedIds.contains(dev.id)) claimedIds << dev.id
+                
+                // --- SNOOZE CHECK FIRST (For Scoring) ---
+                boolean isSnoozed = false
+                if(state.dismissed && state.dismissed.containsKey(dev.id.toString())) isSnoozed = true
+                
+                def severity = 0 
+                def status = "Healthy"
+                def issues = []
+                def icon = "fa-check-circle"
+                def type = "generic"
+
+                // 1. Check Activity (Offline)
+                def lastAct = dev.getLastActivity()
+                def lastSeen = "Never"
+                long hours = -1
+                
+                if(lastAct) {
+                    long diff = nowTime - lastAct.time
+                    hours = diff / 3600000
+                    lastSeen = lastAct.format("MMM d, h:mm a", location.timeZone)
+                    
+                    if(hours > actHoursVal) {
+                        if(autoHeal && (!state.healHistory[dev.id.toString()] || (nowTime - state.healHistory[dev.id.toString()]) > 43200000)) {
+                            if(dev.hasCommand("refresh")) {
+                                dev.refresh()
+                                state.healHistory[dev.id.toString()] = nowTime
+                                status = "Self-Healing... 🩹"
+                                severity = 0; type = "healing"
+                            } else {
+                                severity = 2; status = "Offline"; issues << "Offline (${hours}h)"; icon = "fa-wifi"; type = "offline"
+                                if(!isSnoozed) offlineCount++
+                            }
+                        } else {
+                            severity = 2; status = "Offline"; issues << "Offline (${hours}h)"; icon = "fa-wifi"; type = "offline"
+                            if(!isSnoozed) offlineCount++
+                        }
+                    }
+                } else {
+                    severity = 2; status = "Offline"; issues << "No Signal"; icon = "fa-wifi"; type = "offline"
+                    if(!isSnoozed) offlineCount++
+                }
+
+                // 2. Check Battery
+                def battVal = 0
+                if(severity < 2 && dev.hasCapability("Battery")) {
+                    def batt = dev.currentValue("battery")
+                    if(batt != null) {
+                        battVal = batt.toInteger()
+                        if(isDaily) {
+                            def lastVal = state.battSnapshot[dev.id.toString()]
+                            if(lastVal != null && (lastVal - battVal) > 15) { severity = 2; issues << "Rapid Drain ⚡"; }
+                            state.battSnapshot[dev.id.toString()] = battVal
+                        }
+                        if(battVal <= battCritVal) {
+                            severity = 2; status = "Critical"; issues << "Dead Batt"; icon = "fa-battery-empty"; type = "battery"
+                            if(!isSnoozed) battIssues++
+                        } else if(battVal <= battLowVal) {
+                            if(severity < 2) severity = 1; 
+                            issues << "Low Batt"; 
+                            if(status == "Healthy") { status = "Warning"; icon = "fa-battery-quarter"; type = "battery" }
+                            if(!isSnoozed) battIssues++
+                        }
+                    }
+                }
+
+                // 3. Check Signal
+                def rssi = dev.currentValue("rssi")
+                if(rssi != null) {
+                    int r = rssi.toInteger()
+                    totalSignal += r; signalCount++
+                    if(r < -90 && warnSig) { 
+                         if(severity == 0) { severity = 1; status = "Warning"; icon = "fa-signal"; }
+                         issues << "Weak Signal";
+                    }
+                } else { rssi = "--" }
+                
+                // 4. Ghost
+                if(severity < 2 && lastAct) {
+                    def isGhost = false
+                    if(dev.hasCapability("Motion Sensor") && dev.currentValue("motion") == "active") isGhost = true
+                    else if(dev.hasCapability("Contact Sensor") && dev.currentValue("contact") == "open") isGhost = true
+                    else if(dev.hasCapability("Water Sensor") && dev.currentValue("water") == "wet") isGhost = true
+                    
+                    if(isGhost && hours > ghostHoursVal) {
+                        severity = 2; status = "Ghosted 👻"; issues << "Stuck Active (${hours}h)"; icon = "fa-ghost"; type = "ghost"
+                    }
+                }
+
+                if(isSnoozed && severity > 0) status = "Snoozed 💤"
+
+                def reasonStr = issues.join(" • ")
+                if(!reasonStr) reasonStr = "OK"
+                
+                def dateStr = settings["date_${dev.id}"]
+                def byUser = settings["user_${dev.id}"]
+                def ageStr = ""
+                if(dateStr) {
+                    try {
+                        Date d = Date.parse("yyyy-MM-dd", dateStr)
+                        long diffMs = nowTime - d.time
+                        long days = diffMs / 86400000
+                        if(days > 365) ageStr = "${(days/365).toFloat().round(1)} yrs"
+                        else ageStr = "${days} days"
+                    } catch(e) {}
+                }
+
+                def meta = [
+                    loc: settings["desc_${dev.id}"] ?: "",
+                    bType: settings["battType_${dev.id}"] ?: "",
+                    bQty: settings["battQty_${dev.id}"] ?: "",
+                    battDate: dateStr,
+                    battAge: ageStr,
+                    replacedBy: byUser,
+                    rssi: rssi
+                ]
+
+                def item = [
+                    id: dev.id, name: dev.displayName, severity: severity,
+                    status: status, reason: reasonStr, 
+                    icon: icon, type: type, lastSeen: lastSeen,
+                    meta: meta, val: battVal, 
+                    dni: dev.deviceNetworkId,
+                    snoozed: isSnoozed
+                ]
+                
+                groupItems << item
+                if(severity > 0 && !isSnoozed && type != "healing") {
+                    groupIssues++
+                    if(!healthData.critical.find{it.id == dev.id}) healthData.critical << item
+                }
+            }
+        }
+        
+        groupItems.sort { a, b -> 
+            if(a.severity != b.severity) return b.severity <=> a.severity 
+            return a.name <=> b.name
+        }
+
+        return [name: groupName, icon: groupIcon, items: groupItems, issues: groupIssues]
+    }
+
+    // --- PROCESS GROUPS ---
+    if(settings.grpPlug) healthData.groups << checkGroup(settings.grpPlug, "Plugs", "fa-plug")
+    if(settings.grpSwitch) healthData.groups << checkGroup(settings.grpSwitch, "Switches", "fa-toggle-on")
+    if(settings.grpSmoke) healthData.groups << checkGroup(settings.grpSmoke, "Smoke & CO", "fa-fire-extinguisher")
+    if(settings.grpLock) healthData.groups << checkGroup(settings.grpLock, "Locks", "fa-lock")
+    if(settings.grpWater) healthData.groups << checkGroup(settings.grpWater, "Leak Sensors", "fa-droplet")
+    if(settings.grpContact) healthData.groups << checkGroup(settings.grpContact, "Doors & Windows", "fa-door-open")
+    if(settings.grpMotion) healthData.groups << checkGroup(settings.grpMotion, "Motion Sensors", "fa-person-running")
+    if(settings.grpTemp) healthData.groups << checkGroup(settings.grpTemp, "Climate", "fa-temperature-half")
+    if(settings.grpButton) healthData.groups << checkGroup(settings.grpButton, "Buttons", "fa-circle-dot")
+    if(settings.grpPres) healthData.groups << checkGroup(settings.grpPres, "Presence", "fa-location-dot")
+    
+    def leftovers = []
+    if(settings.battDevices) leftovers = settings.battDevices.findAll { !claimedIds.contains(it.id) }
+    if(leftovers) healthData.groups << checkGroup(leftovers, "Other Batteries", "fa-battery-full")
+    
+    healthData.groups.sort { a, b -> b.issues <=> a.issues }
+    healthData.critical.sort { a, b -> b.severity <=> a.severity }
+    def critIds = healthData.critical.collect { it.id }
+    healthData.groups.each { grp -> grp.items = grp.items.findAll { !critIds.contains(it.id) } }
+    
+    // --- SCORE ---
+    def healthScore = 100
+    if(offlineCount > 0) healthScore -= (offlineCount * 10)
+    if(battIssues > 0) healthScore -= (battIssues * 5)
+    if(healthScore < 0) healthScore = 0
+     
+    def deductionStr = []
+    if(offlineCount > 0) deductionStr << "-${offlineCount*10} pts (${offlineCount} Offline)"
+    if(battIssues > 0) deductionStr << "-${battIssues*5} pts (${battIssues} Low Batt)"
+    if(deductionStr.isEmpty()) deductionStr << "No deductions. Perfect!"
+    
+    healthData.report = [ score: healthScore, reason: deductionStr.join(", ") ]
+    
+    return [data: healthData, totalIssues: healthData.critical.size()]
+}
+
+// =======================================================================================
+// API
+// =======================================================================================
+
+def serveApiData() {
+    def result = getDeviceHealth()
+    def json = [
+        advisor: result.totalIssues == 0 ? "All Systems Go" : "${result.totalIssues} Issues Found",
+        advisorColor: result.totalIssues == 0 ? "green" : (result.totalIssues > 2 ? "red" : "orange"),
+        critical: result.data.critical,
+        groups: result.data.groups,
+        report: result.data.report,
+        links: [ pulse: getPulseUrl(), hub: getHubUrl() ],
+        hasPulse: (settings.familyPulseApp && settings.familyPulseToken),
+        hasCal: (settings.calendarAppId && settings.calendarToken)
+    ]
+    render contentType: "application/json", data: groovy.json.JsonOutput.toJson(json)
+}
+
+def serveUsers() {
+    def output = []
+    try {
+        if(state.cachedUsers) {
+            state.cachedUsers.each { u ->
+                 output << [id: u.id, name: u.name.toString(), avatar: u.avatar ? u.avatar.toString() : ""]
+            }
+        } else if(settings.familyPulseApp && settings.familyPulseToken) {
+            syncPulseUsers() // Force sync if cache empty
+            if(state.cachedUsers) output = state.cachedUsers
+        }
+    } catch(e) {
+        log.warn "SensorHealth: Failed to fetch/parse users: ${e}"
+    }
+    render contentType: "application/json", data: groovy.json.JsonOutput.toJson(output)
+}
+
+def handleApiCommand() {
+    def type = params.type; def id = params.id; def val = params.val
+    
+    if(type == "replaced") {
+        def date = new Date().format("yyyy-MM-dd", location.timeZone)
+        def userName = "Unknown"
+        if(val && val != "0" && settings.familyPulseApp) {
+            def desc = URLEncoder.encode("Sensor Maintenance", "UTF-8")
+            def rewardUrl = "http://127.0.0.1:8080/apps/api/${settings.familyPulseApp}/cmd/reward?access_token=${settings.familyPulseToken}&uid=${val}&xp=25&coins=25&msg=${desc}"
+            try { httpGet(rewardUrl) { } } catch(e) { log.warn "Reward Failed: $e" }
+            userName = "User #${val}" 
+        }
+        app.updateSetting("date_${id}", date)
+        app.updateSetting("user_${id}", userName)
+        if(state.dismissed) state.dismissed.remove(id.toString())
+        return render(contentType: "application/json", data: "{ \"status\": \"ok\", \"date\": \"${date}\" }")
+    }
+    else if(type == "dismiss") {
+        if(!state.dismissed) state.dismissed = [:]
+        state.dismissed[id.toString()] = new Date().time + (48 * 60 * 60 * 1000)
+        return render(contentType: "application/json", data: "{ \"status\": \"ok\" }")
+    }
+    else if(type == "dismissHoliday") {
+        if(!state.dismissed) state.dismissed = [:]
+        state.dismissed[id.toString()] = new Date().time + (180L * 24 * 60 * 60 * 1000)
+        return render(contentType: "application/json", data: "{ \"status\": \"ok\" }")
+    }
+    else if(type == "refresh") {
+        def dev = getDeviceById(id)
+        if(dev) {
+            if(dev.hasCommand("refresh")) dev.refresh()
+            return render(contentType: "application/json", data: "{ \"status\": \"ok\" }")
+        }
+        return render(contentType: "application/json", data: "{ \"status\": \"error\" }")
+    }
+    else if(type == "configure") {
+        def dev = getDeviceById(id)
+        if(dev && dev.hasCommand("configure")) {
+            dev.configure()
+            return render(contentType: "application/json", data: "{ \"status\": \"ok\" }")
+        }
+        return render(contentType: "application/json", data: "{ \"status\": \"error\", \"msg\": \"Command not supported\" }")
+    }
+    else if(type == "refreshAll") {
+        def result = getDeviceHealth()
+        int count = 0
+        def allDevs = []
+        result.data.critical.each { allDevs << it }
+        result.data.groups.each { grp -> grp.items.each { allDevs << it } }
+        allDevs.each { d ->
+            if(d.type == "offline") {
+                 def devObj = getDeviceById(d.id)
+                if(devObj && devObj.hasCommand("refresh")) { devObj.refresh(); count++; }
+            }
+        }
+        return render(contentType: "application/json", data: "{ \"status\": \"ok\", \"count\": ${count} }")
+    }
+    else if(type == "addToGrocery") {
+        if(settings.calendarAppId && settings.calendarToken) {
+            def item = java.net.URLDecoder.decode(id, "UTF-8")
+            def url = "http://127.0.0.1:8080/apps/api/${settings.calendarAppId}/cmd/grocery/add?access_token=${settings.calendarToken}&item=${URLEncoder.encode(item, "UTF-8")}&store=Other&authorName=SensorHealth&authorAvatar=🔋"
+            try { httpGet(url) { } } catch(e) { return render(contentType: "application/json", data: "{ \"status\": \"error\" }") }
+            return render(contentType: "application/json", data: "{ \"status\": \"ok\" }")
+        }
+        return render(contentType: "application/json", data: "{ \"status\": \"error\" }")
+    }
+}
+
+def getDeviceById(id) {
+    def all = getAllDevices()
+    return all.find { it.id == id }
+}
+
+def getPulseUrl() {
+    if(settings.familyPulseApp && settings.familyPulseToken) {
+        return "https://cloud.hubitat.com/api/${getSafeHubUID()}/apps/${settings.familyPulseApp}/portal?access_token=${settings.familyPulseToken}"
+    }
+    return ""
+}
+
+def getHubUrl() {
+    if(settings.familyHubAppId && settings.familyHubToken) {
+        return "https://cloud.hubitat.com/api/${getSafeHubUID()}/apps/${settings.familyHubAppId}/dashboard?access_token=${settings.familyHubToken}"
+    }
+    return ""
+}
+
+def serveApp() { render contentType: "text/html; charset=utf-8", data: getHtml() }
+
+// =======================================================================================
+// DASHBOARD HTML
+// =======================================================================================
+
+def getHtml() {
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sensor Health Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --primary: #FF6B6B; --gradient: linear-gradient(135deg, #FF6B6B 0%, #FF8E53 100%); --bg: #f4f6f8; --card: #ffffff; --text: #2d3436; --dark-bg: #1e1e2f; --dark-card: #27293d; --dark-text: #ffffff; }
+        body { margin: 0; padding: 0; font-family: 'Nunito', sans-serif; background: var(--bg); color: var(--text); padding-bottom: 50px; transition: 0.3s; }
+        body.dark-mode { background: var(--dark-bg); color: var(--dark-text); }
+        
+        .header { position: sticky; top: 0; z-index: 100; background: var(--gradient); padding: 0 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); color: white; height: 100px; }
+        .brand { display: flex; align-items: center; gap: 12px; font-weight:800; font-size:20px; letter-spacing:0.5px; }
+        .brand-icon { width: 40px; height: 40px; background: rgba(255,255,255,0.25); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .pro-tag { font-size: 10px; opacity: 0.7; margin-left: 3px; vertical-align: super; letter-spacing: 1px; font-weight: 900; }
+        
+        .header-actions { display: flex; gap: 10px; }
+        .icon-btn { width: 40px; height: 40px; background: rgba(255,255,255,0.25); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; transition: 0.2s; }
+        .icon-btn:hover { background: rgba(255,255,255,0.4); }
+
+        .container { max-width: 1200px; margin: 0 auto; padding: 15px; }
+        
+        /* Health Ring */
+        .health-hero { display:flex; align-items:center; justify-content:center; flex-direction:column; margin-bottom:20px; text-align:center; padding:20px; background:white; border-radius:15px; box-shadow:0 2px 10px rgba(0,0,0,0.05); }
+        body.dark-mode .health-hero { background: var(--dark-card); }
+        
+        .ring-container { position:relative; width:120px; height:120px; border-radius:50%; background: conic-gradient(#2ecc71 var(--p), #eee 0deg); display:flex; align-items:center; justify-content:center; margin-bottom:10px; transition:1s; }
+        .ring-inner { width:100px; height:100px; border-radius:50%; background:white; display:flex; align-items:center; justify-content:center; flex-direction:column; }
+        body.dark-mode .ring-inner { background: var(--dark-card); }
+        .score-val { font-size:28px; font-weight:900; line-height:1; }
+        .score-label { font-size:10px; text-transform:uppercase; color:#aaa; font-weight:700; }
+        .score-desc { font-size:12px; color:#555; margin-bottom:10px; font-weight:600; }
+        body.dark-mode .score-desc { color: #ccc; }
+        
+        .quick-actions { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; justify-content:center; }
+        .qa-btn { padding:8px 16px; border-radius:20px; background:#f1f5f9; color:#333; font-weight:700; font-size:12px; cursor:pointer; border:none; display:flex; align-items:center; gap:5px; }
+        body.dark-mode .qa-btn { background:#444; color:white; }
+        .qa-btn:hover { transform:scale(1.05); }
+
+        /* Search */
+        .search-box { margin-bottom: 15px; position: relative; max-width:600px; margin:0 auto 20px auto; }
+        .search-input { width: 100%; padding: 12px 15px; padding-left: 40px; border: none; border-radius: 30px; font-family: 'Nunito'; font-size: 16px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); box-sizing: border-box; }
+        .search-icon { position: absolute; left: 15px; top: 12px; color: #ccc; }
+        body.dark-mode .search-input { background: #333; color: white; }
+
+        /* Responsive Grid */
+        .grid-layout { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 15px; }
+        
+        /* Groups - CLICKABLE TILES */
+        .group-card { background: white; border-radius: 12px; padding: 20px; text-align:center; box-shadow: 0 2px 5px rgba(0,0,0,0.03); cursor:pointer; transition:0.2s; border:1px solid #eee; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; height:100px; }
+        body.dark-mode .group-card { background: var(--dark-card); border-color:#444; }
+        .group-card:hover { transform:translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.08); }
+        .grp-icon { font-size: 28px; color: #FF6B6B; margin-bottom: 5px; }
+        .grp-name { font-weight: 800; font-size: 16px; color: #333; }
+        body.dark-mode .grp-name { color: white; }
+        .grp-stat { font-size: 12px; color: #777; font-weight:600; background:#f1f5f9; padding:2px 8px; border-radius:10px; }
+        body.dark-mode .grp-stat { background:#444; color:#ccc; }
+        .grp-stat.warn { background:#e74c3c; color:white; }
+        
+        /* Device List in Modal */
+        .dev-list { padding: 10px; }
+        
+        .device-item { padding: 12px 15px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 12px; transition: background 0.2s; cursor: pointer; }
+        body.dark-mode .device-item { border-color: #444; }
+        .device-item:hover { background: #f9f9f9; }
+        body.dark-mode .device-item:hover { background: #333; }
+        
+        .dev-icon { font-size: 1.5em; width: 30px; text-align: center; color:#95a5a6; }
+        .sev-0 .dev-icon { color: #2ecc71; }
+        .sev-1 .dev-icon { color: #f39c12; }
+        .sev-2 .dev-icon { color: #e74c3c; }
+        
+        .dev-info { flex: 1; }
+        .dev-name { font-weight: 700; font-size: 1em; color: #333; }
+        body.dark-mode .dev-name { color: white; }
+        .dev-sub { font-size: 0.85em; color: #777; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; align-items:center; }
+        body.dark-mode .dev-sub { color: #aaa; }
+        .dev-tag { font-size: 0.75em; background: #eef; color: #55a; padding: 1px 6px; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 3px; }
+        body.dark-mode .dev-tag { background: #444; color: #ddd; }
+        
+        .batt-bar-bg { width: 40px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; display:inline-block; vertical-align:middle; margin-right:5px; }
+        body.dark-mode .batt-bar-bg { background: #444; }
+        .batt-bar-fill { height: 100%; background: #2ecc71; }
+        .batt-bar-fill.low { background: #f1c40f; }
+        .batt-bar-fill.crit { background: #e74c3c; }
+
+        .crit-section { margin-bottom: 20px; }
+        .crit-header { font-size: 0.9em; font-weight: 800; color: #c0392b; text-transform: uppercase; margin-bottom: 10px; padding-left: 5px; letter-spacing: 0.5px; display: flex; align-items: center; gap: 5px; }
+        .crit-card { background: white; border-radius: 12px; border-left: 5px solid #c0392b; box-shadow: 0 4px 10px rgba(192, 57, 43, 0.1); overflow: hidden; }
+        body.dark-mode .crit-card { background: var(--dark-card); }
+
+        .toast-box { position: fixed; bottom: 20px; left: 50%; transform: translate(-50%, 20px); background: #2d3436; color: white; padding: 12px 24px; border-radius: 30px; font-weight: 700; box-shadow: 0 10px 20px rgba(0,0,0,0.2); z-index: 2000; opacity: 0; transition: all 0.3s; pointer-events: none; display: flex; align-items: center; gap: 10px; }
+        .toast-box.show { opacity: 1; transform: translate(-50%, 0); }
+
+        /* Modals - HIGH Z-INDEX */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.5); align-items:center; justify-content:center; backdrop-filter:blur(5px); }
+        .modal.active { display: flex; }
+        .modal-content { background-color: #fefefe; margin: auto; padding: 0; border-radius: 15px; width: 90%; max-width: 450px; box-shadow: 0 15px 40px rgba(0,0,0,0.3); overflow: hidden; animation: slideUp 0.3s; }
+        body.dark-mode .modal-content { background: var(--dark-card); color: white; }
+        .modal-header { background: var(--gradient); color: white; padding: 20px; text-align: center; position:relative; }
+        .modal-body { padding: 20px; max-height: 70vh; overflow-y:auto; }
+        
+        #devModal { z-index: 1010; } /* Sit on top of groups */
+        
+        .data-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; font-size: 0.9em; }
+        body.dark-mode .data-row { border-color: #444; }
+        .data-label { color: #777; font-weight: 600; }
+        body.dark-mode .data-label { color: #aaa; }
+        .data-val { font-weight: 800; color: #333; }
+        body.dark-mode .data-val { color: white; }
+        
+        .modal-btn { background: #3498db; color: white; border: none; padding: 12px; width: 100%; border-radius: 8px; font-weight: bold; font-size: 1em; margin-top: 10px; cursor: pointer; display:flex; align-items:center; justify-content:center; gap:8px;}
+        .btn-green { background: #2ecc71; }
+        .btn-grey { background: #95a5a6; }
+        .btn-purple { background: #9b59b6; }
+        .btn-orange { background: #e67e22; }
+        .btn-red { background: #e74c3c; }
+        .modal-close { position: absolute; top: 15px; right: 15px; color: white; font-size: 24px; cursor: pointer; z-index:100; opacity:0.8; }
+        .modal-close:hover { opacity:1; transform:scale(1.1); }
+
+        .user-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 15px; }
+        .user-chip { background: #f1f5f9; border-radius: 8px; padding: 10px; text-align: center; cursor: pointer; border: 2px solid transparent; }
+        body.dark-mode .user-chip { background: #333; }
+        .user-chip:hover { border-color: #3498db; }
+        .user-avatar { width: 40px; height: 40px; background: #ddd; border-radius: 50%; margin: 0 auto 5px auto; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #555; }
+        /* NEW: Real Avatar Image */
+        .user-avatar-img { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; margin: 0 auto 5px auto; display: block; border: 2px solid #ddd; }
+        .user-name { font-size: 0.8em; font-weight: 700; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        body.dark-mode .user-name { color: #ddd; }
+        .refresh-users { color: #3498db; font-size: 0.8em; cursor: pointer; margin-top: 5px; text-decoration: underline; }
+        
+        .shop-list { list-style: none; padding: 0; margin: 0; }
+        .shop-item { display: flex; justify-content: space-between; padding: 10px; background: #f8f9fa; margin-bottom: 5px; border-radius: 6px; font-weight: bold; color: #555; align-items:center;}
+        body.dark-mode .shop-item { background: #333; color: white; }
+        .shop-add { font-size:18px; color:#2ecc71; cursor:pointer; margin-left:10px; }
+        
+        /* Search Results Container */
+        #searchResults { display:none; }
+        #searchResults.active { display:grid; }
+
+        .hidden { display: none !important; }
+        @keyframes slideUp { from { transform: translateY(50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        
+        /* CHICKEN ADVISOR STYLES */
+        .chicken-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1500;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            pointer-events: none; /* Let clicks pass through if needed */
+        }
+        
+        .chicken-bubble {
+            background: white;
+            padding: 15px;
+            border-radius: 15px 15px 0 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.15);
+            margin-bottom: 10px;
+            max-width: 250px;
+            font-size: 14px;
+            font-weight: 700;
+            color: #444;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.5s ease;
+            pointer-events: auto;
+        }
+        
+        .chicken-bubble.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
+        .chicken-emoji {
+            font-size: 60px;
+            cursor: pointer;
+            filter: drop-shadow(0 5px 5px rgba(0,0,0,0.2));
+            transition: transform 0.2s;
+            pointer-events: auto;
+        }
+        
+        .chicken-emoji:hover {
+            transform: scale(1.1) rotate(-10deg);
+        }
+        
+        .chicken-emoji:active {
+            transform: scale(0.9);
+        }
+        
+        body.dark-mode .chicken-bubble {
+            background: #2d3436;
+            color: white;
+        }
+
+        @media (max-width: 600px) {
+            .dev-list { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="brand">
+            <div class="brand-icon"><i class="fa-solid fa-battery-full"></i></div>
+            <div>SENSOR HEALTH <span class="pro-tag">PRO</span></div>
+        </div>
+        <div class="header-actions">
+            <div class="icon-btn" onclick="toggleDark()"><i class="fa-solid fa-moon"></i></div>
+            <div id="toolBtn" class="icon-btn" onclick="showTools()"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+            <div id="pulseBtn" class="icon-btn hidden" onclick="goPulse()"><i class="fa-solid fa-heart-pulse"></i></div>
+            <div id="hubBtn" class="icon-btn hidden" onclick="goHub()"><i class="fa-solid fa-home"></i></div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="health-hero" id="heroSection">
+            <div class="ring-container" id="healthRing">
+                <div class="ring-inner">
+                    <div class="score-val" id="scoreVal">--</div>
+                    <div class="score-label">HEALTH</div>
+                </div>
+            </div>
+            <div class="score-desc" id="scoreDesc">Scanning System...</div>
+            <div class="quick-actions">
+                <button class="qa-btn" onclick="pingAllOffline()"><i class="fa-solid fa-rotate"></i> Refresh Net</button>
+                <button class="qa-btn" onclick="showShoppingList()"><i class="fa-solid fa-battery-half"></i> Need Batteries?</button>
+            </div>
+        </div>
+
+        <div class="search-box">
+            <i class="fa-solid fa-search search-icon"></i>
+            <input type="text" id="searchInput" class="search-input" placeholder="Search all devices..." onkeyup="filterDevices()">
+        </div>
+
+        <div id="critContainer" class="crit-section hidden">
+            <div class="crit-card">
+                <div class="crit-header"><i class="fa-solid fa-triangle-exclamation"></i> Action Required</div>
+                <div id="critList"></div>
+            </div>
+        </div>
+
+        <div id="groupContainer" class="grid-layout"></div>
+        
+        <div id="searchResults" class="grid-layout active"></div>
+    </div>
+    
+    <div id="toast" class="toast-box"></div>
+
+    <div id="devModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <i class="fa-solid fa-xmark modal-close" onclick="closeModal()"></i>
+                <div class="modal-icon" id="mIcon"><i class="fa-solid fa-microchip"></i></div>
+                <div class="modal-h1" id="mName">Device Name</div>
+                <div class="modal-h2" id="mStatus">Status</div>
+            </div>
+            <div class="modal-body" id="modalMain">
+                <div class="data-row"><span class="data-label">Last Activity</span><span class="data-val" id="mSeen">--</span></div>
+                <div class="data-row"><span class="data-label">Battery Level</span><span class="data-val" id="mBatt">--</span></div>
+                <div class="data-row"><span class="data-label">Signal (RSSI)</span><span class="data-val" id="mRssi">--</span></div>
+                <div class="data-row"><span class="data-label">Battery Type</span><span class="data-val" id="mBType">--</span></div>
+                <div class="data-row"><span class="data-label">Replaced Date</span><span class="data-val" id="mBDate">--</span></div>
+                <div class="data-row"><span class="data-label">Location</span><span class="data-val" id="mLoc">--</span></div>
+                <div class="data-row" style="border:none; font-size:0.8em; opacity:0.6;"><span class="data-label">DNI</span><span class="data-val" id="mDni">--</span></div>
+                
+                <button id="mBtn" class="modal-btn btn-green" onclick="showUserPicker()">Mark Battery Replaced</button>
+                <button id="mNoStock" class="modal-btn btn-orange hidden" onclick="addBatteryToGrocery()"><i class="fa-solid fa-cart-plus"></i> 🚫 Out of Stock (Add to List)</button>
+                <div style="display:flex; gap:10px;">
+                    <button id="mRefresh" class="modal-btn" onclick=""><i class="fa-solid fa-rotate"></i> Refresh</button>
+                    <button id="mConfig" class="modal-btn btn-purple" onclick=""><i class="fa-solid fa-wrench"></i> Repair</button>
+                </div>
+              
+                <div style="display:flex; gap:10px; margin-top:10px;">
+                    <button class="modal-btn btn-grey" onclick="dismissDevice()"><i class="fa-solid fa-bed"></i> Snooze</button>
+                    <button class="modal-btn btn-orange" onclick="dismissHoliday()"><i class="fa-solid fa-gift"></i> 6 Mo</button>
+                </div>
+            </div>
+            
+            <div class="modal-body hidden" id="modalUsers">
+                <div style="text-align:center; font-weight:800;">Who performed this?</div>
+                <div class="refresh-users" onclick="loadUsers(true)"><i class="fa-solid fa-rotate"></i> Refresh List</div>
+                <div id="userGrid" class="user-grid" style="margin-top:15px;"></div>
+                <button class="modal-btn btn-grey" onclick="hideUserPicker()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="groupModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <i class="fa-solid fa-xmark modal-close" onclick="closeModal()"></i>
+                <div class="modal-h1" id="gModalTitle">Group Name</div>
+            </div>
+            <div class="modal-body" style="padding:0;">
+                <div id="groupList" class="dev-list" style="border:none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="shopModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <i class="fa-solid fa-xmark modal-close" onclick="closeShop()"></i>
+                <div class="modal-icon"><i class="fa-solid fa-cart-shopping"></i></div>
+                <div class="modal-h1">Battery Needs</div>
+                <div class="modal-h2">Based on current Critical devices</div>
+            </div>
+            <div class="modal-body">
+                <ul id="shopList" class="shop-list"></ul>
+                <button class="modal-btn btn-grey" onclick="closeShop()">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="toolsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <i class="fa-solid fa-xmark modal-close" onclick="closeTools()"></i>
+                <div class="modal-icon"><i class="fa-solid fa-toolbox"></i></div>
+                <div class="modal-h1">Tools</div>
+            </div>
+            <div class="modal-body">
+                <button class="modal-btn" onclick="pingAllOffline()"><i class="fa-solid fa-bolt"></i> Wake Up All Offline</button>
+                <button class="modal-btn btn-green" onclick="showShoppingList()"><i class="fa-solid fa-list-check"></i> Battery Shopping List</button>
+                <button class="modal-btn btn-grey" onclick="closeTools()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="chicken-container">
+        <div id="advisorBubble" class="chicken-bubble">
+            Loading... Cluck! <script>document.write(String.fromCodePoint(0x1F414));</script>
+        </div>
+        <div class="chicken-emoji" onclick="pokeChicken()"><script>document.write(String.fromCodePoint(0x1F414));</script></div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('access_token');
+        const API_URL = "api/data" + (token ? `?access_token=\${token}` : "");
+        const USERS_URL = "api/users" + (token ? `?access_token=\${token}` : "");
+        const CMD_URL = "api/cmd";
+        let LINKS = {};
+        let DEVICE_MAP = {}; let PULSE_USERS = []; let ACTIVE_DEV_ID = null;
+        let ALL_DEVICES = []; let HAS_CAL = false;
+        let HUB_IP = window.location.hostname;
+        let GROUP_DATA = [];
+        let isPaused = false;
+        window.onclick = function(event) {
+            if (event.target.classList.contains('modal')) {
+                closeModal();
+                closeShop();
+                closeTools();
+            }
+        }
+        
+        // --- CHICKEN BRAIN ---
+        const chickenTips = [
+            "Click on a group tile to see details! Cluck!",
+            "I check for ghosts (stuck sensors) automatically!",
+            "Need batteries? Use the tools menu!",
+            "You can snooze a device if it's annoying you.",
+            "Keep your score at 100% for happy chickens!",
+            "I sync with Family Pulse every month!"
+        ];
+        
+        function updateChicken(report, criticalCount) {
+            const bubble = document.getElementById('advisorBubble');
+            let msg = "";
+            
+            // Priority 1: Critical Issues
+            if (criticalCount > 0) {
+                // FIXED: Generating unicode via JS to prevent file encoding errors
+                msg = `Uh oh! We have \${criticalCount} issues to fix! Cluck! ` + String.fromCodePoint(0x26A0, 0xFE0F);
+            } 
+            // Priority 2: Perfect Score
+            else if (report.score === 100) {
+                // FIXED: Generating unicode via JS to prevent file encoding errors
+                msg = "Everything is egg-cellent! 100% Health! " + String.fromCodePoint(0x1F95A, 0x2728);
+            } 
+            // Priority 3: Random Tip
+            else {
+                const randomTip = chickenTips[Math.floor(Math.random() * chickenTips.length)];
+                msg = randomTip;
+            }
+            
+            bubble.innerText = msg;
+            bubble.classList.add('show');
+            
+            // Hide bubble after 8 seconds if it's just a tip, keep it if it's an error
+            if(criticalCount === 0) {
+                setTimeout(() => { bubble.classList.remove('show'); }, 8000);
+            }
+        }
+
+        function pokeChicken() {
+            const bubble = document.getElementById('advisorBubble');
+            bubble.classList.remove('show');
+            setTimeout(() => {
+                // FIXED: Generating unicode via JS to prevent file encoding errors
+                bubble.innerText = "Hey! Don't poke the feathers! " + String.fromCodePoint(0x1F414);
+                bubble.classList.add('show');
+            }, 200);
+        }
+
+        function loadData() {
+            if(isPaused) return;
+            fetch(API_URL).then(r => r.json()).then(d => {
+                updateHealthRing(d.report);
+                renderCritical(d.critical);
+                renderGroups(d.groups);
+                LINKS = d.links; HAS_CAL = d.hasCal;
+                GROUP_DATA = d.groups; 
+        
+                if(d.links.hub) document.getElementById('hubBtn').classList.remove('hidden');
+                if(d.links.pulse) document.getElementById('pulseBtn').classList.remove('hidden');
+                if(d.hasPulse && PULSE_USERS.length === 0) loadUsers(false);
+                
+                ALL_DEVICES = [...d.critical]; 
+                d.groups.forEach(g => { ALL_DEVICES = [...ALL_DEVICES, ...g.items] });
+                
+                if(document.getElementById('searchInput').value.length > 0) filterDevices();
+                
+                // TRIGGER CHICKEN UPDATE
+                updateChicken(d.report, d.critical.length);
+            });
+        }
+        
+        function updateHealthRing(report) {
+            if(!report) return;
+            let score = report.score;
+            document.getElementById('scoreVal').innerText = score + "%";
+            document.getElementById('scoreDesc').innerText = report.reason;
+            let color = "#2ecc71";
+            if(score < 80) color = "#f1c40f";
+            if(score < 50) color = "#e74c3c";
+            document.getElementById('healthRing').style.background = `conic-gradient(\${color} \${score * 3.6}deg, #eee 0deg)`;
+        }
+
+        function showToast(msg, icon="fa-check-circle") {
+            const t = document.getElementById('toast');
+            t.innerHTML = `<i class="fa-solid \${icon}"></i> <span>\${msg}</span>`;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        function toggleDark() {
+            document.body.classList.toggle('dark-mode');
+            localStorage.setItem('shp_dark', document.body.classList.contains('dark-mode'));
+        }
+        if(localStorage.getItem('shp_dark') === 'true') document.body.classList.add('dark-mode');
+        
+        function renderCritical(list) {
+            const container = document.getElementById('critContainer');
+            const listEl = document.getElementById('critList');
+            if(!list || list.length === 0) { container.classList.add('hidden'); return; }
+            container.classList.remove('hidden');
+            let html = "";
+            list.forEach(dev => { DEVICE_MAP[dev.id] = dev; html += buildDeviceRow(dev); });
+            listEl.innerHTML = html;
+        }
+
+        function renderGroups(groups) {
+            const container = document.getElementById('groupContainer');
+            if(document.getElementById('searchInput').value.length > 0) return; 
+            
+            let html = "";
+            groups.forEach((grp, index) => {
+                if(grp.items.length === 0) return;
+                let statusHtml = "Healthy";
+                let statusClass = "grp-stat";
+                if(grp.issues > 0) {
+                     statusHtml = `\${grp.issues} Issues`;
+                     statusClass = "grp-stat warn";
+                }
+                grp.items.forEach(dev => { DEVICE_MAP[dev.id] = dev; });
+
+                html += `
+                <div class="group-card" onclick="openGroupModal(\${index})">
+                    <div class="grp-icon"><i class="fa-solid \${grp.icon}"></i></div>
+                    <div class="grp-name">\${grp.name}</div>
+                    <div class="\${statusClass}">\${statusHtml}</div>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+        
+        function openGroupModal(index) {
+            const grp = GROUP_DATA[index];
+            if(!grp) return;
+            
+            document.getElementById('gModalTitle').innerText = grp.name;
+            let html = "";
+            grp.items.forEach(dev => { html += buildDeviceRow(dev); });
+            document.getElementById('groupList').innerHTML = html;
+            isPaused = true;
+            document.getElementById('groupModal').classList.add('active');
+        }
+
+        function buildDeviceRow(dev) {
+            let metaHtml = "";
+            if(dev.type === "battery" && dev.val > 0) {
+                let color = "batt-bar-fill";
+                if(dev.val < 20) color += " low";
+                if(dev.val < 10) color += " crit";
+                metaHtml += `<div class="batt-bar-bg"><div class="\${color}" style="width:\${dev.val}%"></div></div>`;
+            }
+            if(dev.snoozed) metaHtml += `<span class="dev-tag" style="background:#f3e5f5; color:#8e44ad;"><i class="fa-solid fa-moon"></i> Snoozed</span>`;
+            else if(dev.reason && dev.reason !== "OK") {
+                let color = "#fff5f5";
+                let text = "#c0392b";
+                if(dev.type === 'ghost') { color="#e8f6f3"; text="#16a085"; }
+                if(dev.type === 'healing') { color="#e3f2fd"; text="#3498db"; }
+                metaHtml += `<span class="dev-tag" style="background:\${color}; color:\${text};">\${dev.reason}</span>`;
+            }
+
+            return `
+            <div class="device-item sev-\${dev.severity}" onclick="openModal('\${dev.id}')">
+                <div class="dev-icon"><i class="fa-solid \${dev.icon}"></i></div>
+                <div class="dev-info">
+                    <div class="dev-name">\${dev.name}</div>
+                    <div class="dev-sub">\${metaHtml} <span style="opacity:0.6; font-size:0.9em; margin-left:5px;">\${dev.lastSeen}</span></div>
+                </div>
+            </div>`;
+        }
+
+        function filterDevices() {
+            let term = document.getElementById('searchInput').value.toLowerCase();
+            const groupCont = document.getElementById('groupContainer');
+            const searchRes = document.getElementById('searchResults');
+            const hero = document.getElementById('heroSection');
+            if(term.length > 0) {
+                isPaused = true;
+                groupCont.classList.add('hidden');
+                hero.classList.add('hidden');
+                searchRes.style.display = 'grid'; 
+                
+                let html = "";
+                let count = 0;
+                ALL_DEVICES.forEach(dev => {
+                    if(dev.name.toLowerCase().includes(term)) {
+                        DEVICE_MAP[dev.id] = dev;
+                        html += buildDeviceRow(dev);
+                        count++;
+                    }
+                });
+                if(count === 0) html = "<div style='text-align:center; padding:20px; color:#aaa; grid-column:1/-1;'>No devices found.</div>";
+                searchRes.innerHTML = html;
+            } else {
+                isPaused = false;
+                groupCont.classList.remove('hidden');
+                hero.classList.remove('hidden');
+                searchRes.style.display = 'none';
+                searchRes.innerHTML = "";
+            }
+        }
+
+        function showTools() { isPaused = true; document.getElementById('toolsModal').classList.add('active'); }
+        function closeTools() { document.getElementById('toolsModal').classList.remove('active'); isPaused = false; loadData(); }
+        
+        function pingAllOffline() { closeTools(); showToast("Waking Offline Devices..."); fetch(`\${CMD_URL}/refreshAll/0/0?access_token=\${token}`); }
+        
+        function showShoppingList() {
+             isPaused = true;
+             document.getElementById('toolsModal').classList.remove('active'); 
+             let needs = {};
+             ALL_DEVICES.forEach(d => {
+                 if(d.severity > 0 && d.type === 'battery') {
+                     let type = d.meta.bType || "Unknown";
+                     let qty = parseInt(d.meta.bQty) || 1;
+                     if(!needs[type]) needs[type] = 0; needs[type] += qty;
+                 }
+             });
+             let html = "";
+             for (const [key, val] of Object.entries(needs)) {
+                 let addBtn = HAS_CAL ? `<i class="fa-solid fa-cart-plus shop-add" onclick="sendToGrocery('\${key} Batteries')"></i>` : "";
+                 html += `<li class="shop-item"><b>\${key}</b> <div>x\${val} \${addBtn}</div></li>`;
+             }
+             if(html === "") html = "<div style='text-align:center; padding:20px; color:#aaa;'>No batteries needed!</div>";
+             document.getElementById('shopList').innerHTML = html;
+             document.getElementById('shopModal').classList.add('active');
+        }
+        function closeShop() { document.getElementById('shopModal').classList.remove('active'); isPaused = false; loadData(); }
+
+        function openModal(id) {
+            isPaused = true;
+            ACTIVE_DEV_ID = id;
+            const d = DEVICE_MAP[id]; if(!d) return;
+            document.getElementById('mName').innerText = d.name;
+            document.getElementById('mStatus').innerText = d.status;
+            document.getElementById('mIcon').innerHTML = `<i class="fa-solid \${d.icon}"></i>`;
+            document.getElementById('mSeen').innerText = d.lastSeen;
+            document.getElementById('mBatt').innerText = d.type === 'offline' ? "N/A" : (d.val + "%");
+            document.getElementById('mRssi').innerText = d.meta.rssi + " dBm";
+            document.getElementById('mBType').innerText = (d.meta.bQty || "") + " " + (d.meta.bType || "--");
+            document.getElementById('mBDate').innerText = d.meta.battDate || "Never";
+            document.getElementById('mLoc').innerText = d.meta.loc || "--";
+            
+            const btn = document.getElementById('mBtn');
+            const noStock = document.getElementById('mNoStock');
+            // Check if replaced today
+            const today = new Date().toISOString().split('T')[0];
+            if(d.meta.battDate === today) {
+                btn.disabled = true;
+                btn.innerText = "Replaced Today";
+                btn.classList.add('btn-grey');
+                btn.classList.remove('btn-green');
+                btn.onclick = null;
+            } else {
+                btn.disabled = false;
+                btn.innerText = "Mark Battery Replaced";
+                btn.classList.remove('btn-grey');
+                btn.classList.add('btn-green');
+                btn.onclick = function() { showUserPicker(); };
+            }
+            
+            if(d.type === 'battery') {
+                btn.style.display = 'flex';
+                if(HAS_CAL && d.meta.bType) noStock.classList.remove('hidden'); else noStock.classList.add('hidden');
+            } else { btn.style.display = 'none'; noStock.classList.add('hidden'); }
+            
+            document.getElementById('mRefresh').onclick = function() { forceRefresh(id, this); };
+            document.getElementById('mConfig').onclick = function() { forceConfigure(id, this); };
+            
+            document.getElementById('modalMain').classList.remove('hidden');
+            document.getElementById('modalUsers').classList.add('hidden');
+            document.getElementById('devModal').classList.add('active');
+        }
+
+        function closeModal() { 
+            document.querySelectorAll('.modal').forEach(m => m.classList.remove('active'));
+            isPaused = false; 
+            if(document.getElementById('searchInput').value.length > 0) isPaused = true;
+            else loadData();
+        }
+        function loadUsers(force) { 
+            if(force) document.getElementById('userGrid').innerHTML = '<div style="grid-column:1/-1;text-align:center;"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>';
+            // FIX: Add Cache Busting
+            let url = USERS_URL + (USERS_URL.includes('?') ? '&' : '?') + '_t=' + new Date().getTime();
+            fetch(url).then(r => r.json()).then(users => { 
+                PULSE_USERS = users; 
+                if(force) showUserPicker(); 
+            }).catch(e => {
+                // FIX: Safe error handling
+                document.getElementById('userGrid').innerHTML = `<div style="grid-column:1/-1;text-align:center;color:red;padding:10px;">\${e.message || e}</div>`;
+            });
+        }
+        function showUserPicker() {
+            document.getElementById('modalMain').classList.add('hidden');
+            document.getElementById('modalUsers').classList.remove('hidden');
+            let html = "";
+            if(PULSE_USERS && PULSE_USERS.length > 0) {
+                PULSE_USERS.forEach(u => { 
+                    html += `<div class="user-chip" onclick="submitReplacement(\${u.id})" style="display:flex; align-items:center; justify-content:center; padding:15px;">
+                                <div class="user-name" style="font-size:1.1em; margin:0;">\${u.name}</div>
+                             </div>`; 
+                });
+            } else {
+                html = "<div style='grid-column:1/-1;text-align:center;color:#777;padding:10px;'>No users found. Try Refreshing.</div>";
+            }
+            document.getElementById('userGrid').innerHTML = html;
+        }
+        function hideUserPicker() { document.getElementById('modalMain').classList.remove('hidden'); document.getElementById('modalUsers').classList.add('hidden'); }
+        
+        function submitReplacement(userId) {
+            fetch(`\${CMD_URL}/replaced/\${ACTIVE_DEV_ID}/\${userId}?access_token=\${token}`).then(() => { loadData(); setTimeout(closeModal, 500); showToast("Marked Replaced"); });
+        }
+        
+        function forceRefresh(id, btn) {
+             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+             fetch(`\${CMD_URL}/refresh/\${id}/0?access_token=\${token}`).then(() => { showToast("Refresh Sent"); setTimeout(()=>{btn.innerHTML='<i class="fa-solid fa-rotate"></i> Refresh'}, 1000); });
+        }
+        function forceConfigure(id, btn) {
+             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+             fetch(`\${CMD_URL}/configure/\${id}/0?access_token=\${token}`).then(() => { showToast("Configure Sent"); setTimeout(()=>{btn.innerHTML='<i class="fa-solid fa-wrench"></i> Repair'}, 1000); });
+        }
+        function dismissDevice() {
+             fetch(`\${CMD_URL}/dismiss/\${ACTIVE_DEV_ID}/0?access_token=\${token}`).then(() => { loadData(); closeModal(); showToast("Snoozed 2 Days"); });
+        }
+        function dismissHoliday() {
+             fetch(`\${CMD_URL}/dismissHoliday/\${ACTIVE_DEV_ID}/0?access_token=\${token}`).then(() => { loadData(); closeModal(); showToast("Snoozed 6 Months"); });
+        }
+        function addBatteryToGrocery() {
+            const d = DEVICE_MAP[ACTIVE_DEV_ID];
+            if(d && d.meta.bType) sendToGrocery(d.meta.bType + " Batteries");
+            closeModal();
+        }
+        function sendToGrocery(item) {
+            let encoded = encodeURIComponent(item);
+            fetch(`\${CMD_URL}/addToGrocery/\${encoded}/0?access_token=\${token}`).then(r=>r.json()).then(d=>{ if(d.status == 'ok') showToast("Added to List"); });
+        }
+        function pingAllOffline() { showToast("Waking Offline Devices..."); fetch(`\${CMD_URL}/refreshAll/0/0?access_token=\${token}`); }
+        
+        function goHub() { if(LINKS.hub) window.location.href = LINKS.hub; }
+        function goPulse() { if(LINKS.pulse) window.location.href = LINKS.pulse; }
+        
+        setInterval(loadData, 10000); loadData();
+    </script>
+</body>
+</html>
+    """
+}
