@@ -57,7 +57,7 @@ def mainPage() {
         section {
             paragraph """<div style='background:linear-gradient(90deg, #FF6B6B 0%, #FF8E53 100%); padding:25px; border-radius:10px; color:white; text-align:center; margin-bottom:15px;'>
                 <h1 style='margin:0; text-shadow: 0 2px 4px rgba(0,0,0,0.1);'>🏥 SENSOR HEALTH PRO</h1>
-                <div style='font-size:1.1em; opacity:0.9;'>V8.4: Chicken Advisor Edition</div></div>"""
+                <div style='font-size:1.1em; opacity:0.9;'>V8.6: Split Device Edition</div></div>"""
         }
         
         section("<b>WEB DASHBOARD LINKS</b>") {
@@ -79,13 +79,13 @@ def mainPage() {
             input "btnSyncUsers", "button", title: "👥 Sync Users from Family Pulse", width: 6
             input "btnTestReward", "button", title: "🏆 Test Reward (Send to User 1)", width: 6
             input "btnTestInt", "button", title: "🧪 Test All Integrations", width: 12
-           
+            
             if(state.adminMsg) paragraph "<div style='background:#e8f5e9; color:#2e7d32; padding:10px; border-radius:5px; border:1px solid #c8e6c9;'>${state.adminMsg}</div>"
         }
         
         section("<b>CONFIGURATION</b>") {
             href "settingsPage", title: "⚙️ 1. Devices & Logic", description: "Select devices, ghost thresholds, and alerts."
-            href "detailsPage", title: "📝 2. Management & Details", description: "Set battery types and 'Replaced Date'."
+            href "detailsPage", title: "📝 2. Management & Details", description: "Bulk edit batteries, Import CSV, set 'Replaced Date'."
         }
     }
 }
@@ -134,6 +134,10 @@ def settingsPage() {
         section("<b>🚨 Notifications</b>") {
             input "notifyDev", "capability.notification", title: "Send Push Notification", multiple: true
             input "ttsDev", "capability.speechSynthesis", title: "Speak on Speakers", multiple: true
+            
+            paragraph "<b>Custom Notification Template</b><br>Leave blank for default summary. Use variables to send individual detailed alerts per device:"
+            paragraph "<i>%devicename%, %issue%, %batterytype%, %batteryquantity%, %lastchanged%</i>"
+            input "notifTemplate", "text", title: "Notification Template", description: "e.g. %devicename% is %issue%. Needs %batteryquantity% x %batterytype%."
         }
         
         section("<b>⚙️ System</b>") {
@@ -144,16 +148,56 @@ def settingsPage() {
 
 def detailsPage() {
     dynamicPage(name: "detailsPage", title: "Device Details", install: false, uninstall: false, nextPage: "mainPage") {
-        section("<b>📝 Device Metadata</b>") {
-            def allDevs = getAllDevices()
-            allDevs.sort { it.displayName }
-            allDevs.each { dev ->
-                paragraph "<div style='background:#f1f5f9; padding:5px 10px; border-radius:5px; font-weight:bold; margin-top:10px; border-left:3px solid #FF6B6B;'>${dev.displayName}</div>"
-                input "desc_${dev.id}", "text", title: "📍 Location", width: 6
-                input "battType_${dev.id}", "enum", title: "🔋 Type", options: ["AA", "AAA", "CR2032", "CR2450", "CR123A", "9V", "18650", "Rechargeable", "Other"], width: 3
-                input "battQty_${dev.id}", "number", title: "Qty", width: 3
-                input "date_${dev.id}", "text", title: "📅 Last Replaced (YYYY-MM-DD)", width: 12
-                input "user_${dev.id}", "text", title: "👤 Replaced By", width: 12
+        
+        def allDevs = getAllDevices()
+        def battDevs = allDevs.findAll { it.hasCapability("Battery") }
+        def otherDevs = allDevs.findAll { !it.hasCapability("Battery") }
+        
+        battDevs.sort { it.displayName }
+        otherDevs.sort { it.displayName }
+
+        section("<b>📦 Bulk Battery Editor</b>") {
+            paragraph "Select multiple <b>Battery Devices</b> to apply the same info to all of them at once."
+            // UPDATED: Only show battery devices in the bulk dropdown
+            input "bulkDevs", "enum", title: "Select Battery Devices", options: battDevs.collect{ [name:it.displayName, id:it.id] }, multiple: true, width: 12
+            input "bulkType", "enum", title: "Battery Type", options: ["AA", "AAA", "CR2032", "CR2450", "CR123A", "CR2", "9V", "18650", "Rechargeable", "Other"], width: 4
+            input "bulkQty", "number", title: "Qty", width: 4
+            input "bulkDate", "text", title: "Date (YYYY-MM-DD)", width: 4, description: "Leave blank to keep current"
+            input "btnApplyBulk", "button", title: "Apply to Selected", width: 12
+        }
+
+        section("<b>📄 CSV Import</b>") {
+            paragraph "Paste a CSV list to update many devices. Format:<br><b>Device Name, Battery Type, Qty, Date(opt)</b>"
+            input "csvRaw", "textarea", title: "CSV Data", rows: 5
+            input "btnProcessCsv", "button", title: "Process CSV Import", width: 12
+            if(state.csvMsg) paragraph "${state.csvMsg}"
+        }
+
+        // SECTION 1: BATTERY DEVICES (Full Options)
+        section("<b>🔋 Battery Devices</b>") {
+            if(battDevs) {
+                battDevs.each { dev ->
+                    paragraph "<div style='background:#e3f2fd; padding:5px 10px; border-radius:5px; font-weight:bold; margin-top:10px; border-left:3px solid #2196F3;'>${dev.displayName}</div>"
+                    input "desc_${dev.id}", "text", title: "📍 Location", width: 6
+                    input "battType_${dev.id}", "enum", title: "🔋 Type", options: ["AA", "AAA", "CR2032", "CR2450", "CR123A", "CR2", "9V", "18650", "Rechargeable", "Other"], width: 3
+                    input "battQty_${dev.id}", "number", title: "Qty", width: 3
+                    input "date_${dev.id}", "text", title: "📅 Last Replaced (YYYY-MM-DD)", width: 12
+                    input "user_${dev.id}", "text", title: "👤 Replaced By", width: 12
+                }
+            } else {
+                paragraph "No battery devices found."
+            }
+        }
+
+        // SECTION 2: OTHER DEVICES (Location Only)
+        section("<b>🔌 Other Devices (Location Only)</b>") {
+            if(otherDevs) {
+                otherDevs.each { dev ->
+                    paragraph "<div style='background:#f1f5f9; padding:5px 10px; border-radius:5px; font-weight:bold; margin-top:10px; border-left:3px solid #607d8b;'>${dev.displayName}</div>"
+                    input "desc_${dev.id}", "text", title: "📍 Location", width: 12
+                }
+            } else {
+                paragraph "No non-battery devices found."
             }
         }
     }
@@ -168,6 +212,45 @@ def getAllDevices() {
 }
 
 def appButtonHandler(btn) {
+    // --- BULK APPLY ---
+    if(btn == "btnApplyBulk") {
+        if(settings.bulkDevs) {
+            settings.bulkDevs.each { devId ->
+                if(settings.bulkType) app.updateSetting("battType_${devId}", settings.bulkType)
+                if(settings.bulkQty) app.updateSetting("battQty_${devId}", settings.bulkQty)
+                if(settings.bulkDate) app.updateSetting("date_${devId}", settings.bulkDate)
+            }
+            state.csvMsg = "✅ Bulk Update Applied to ${settings.bulkDevs.size()} devices."
+        } else {
+            state.csvMsg = "⚠️ No devices selected."
+        }
+    }
+
+    // --- CSV PROCESS ---
+    if(btn == "btnProcessCsv" && settings.csvRaw) {
+        def lines = settings.csvRaw.split("\n")
+        int count = 0
+        def allDevs = getAllDevices()
+        lines.each { line ->
+            def parts = line.split(",")
+            if(parts.size() >= 2) {
+                def name = parts[0].trim()
+                def type = parts[1].trim()
+                def qty = parts.size() > 2 ? parts[2].trim() : "1"
+                def date = parts.size() > 3 ? parts[3].trim() : ""
+                
+                def target = allDevs.find { it.displayName == name || it.name == name }
+                if(target) {
+                    app.updateSetting("battType_${target.id}", type)
+                    app.updateSetting("battQty_${target.id}", qty)
+                    if(date) app.updateSetting("date_${target.id}", date)
+                    count++
+                }
+            }
+        }
+        state.csvMsg = "✅ CSV Imported. Updated ${count} devices."
+    }
+
     if(btn == "btnSyncUsers") {
         if(settings.familyPulseApp && settings.familyPulseToken) {
             def res = syncPulseUsers()
@@ -240,6 +323,7 @@ def initialize() {
     if(state.healHistory == null) state.healHistory = [:]
     if(state.battSnapshot == null) state.battSnapshot = [:]
     state.remove("adminMsg") 
+    state.remove("csvMsg")
 }
 
 def syncPulseUsers() {
@@ -267,9 +351,27 @@ def syncPulseUsers() {
 def dailyHealthCheck() {
     def result = getDeviceHealth(true) 
     if(result.totalIssues > 0) {
-        def msg = "Sensor Health Alert: ${result.totalIssues} devices need attention."
-        if(settings.notifyDev) settings.notifyDev.deviceNotification(msg)
-        if(settings.ttsDev) settings.ttsDev.speak(msg)
+        
+        // --- CUSTOM TEMPLATE LOGIC ---
+        if(settings.notifTemplate) {
+            result.data.critical.each { item ->
+                def msg = settings.notifTemplate
+                    .replace("%devicename%", item.name)
+                    .replace("%issue%", item.reason)
+                    .replace("%batterytype%", item.meta.bType ?: "N/A")
+                    .replace("%batteryquantity%", item.meta.bQty ?: "1")
+                    .replace("%lastchanged%", item.meta.battDate ?: "Unknown")
+                
+                if(settings.notifyDev) settings.notifyDev.deviceNotification(msg)
+                if(settings.ttsDev) settings.ttsDev.speak(msg)
+            }
+        } 
+        // --- DEFAULT SUMMARY LOGIC ---
+        else {
+            def msg = "Sensor Health Alert: ${result.totalIssues} devices need attention."
+            if(settings.notifyDev) settings.notifyDev.deviceNotification(msg)
+            if(settings.ttsDev) settings.ttsDev.speak(msg)
+        }
     }
 }
 
@@ -565,7 +667,7 @@ def handleApiCommand() {
         allDevs.each { d ->
             if(d.type == "offline") {
                  def devObj = getDeviceById(d.id)
-                if(devObj && devObj.hasCommand("refresh")) { devObj.refresh(); count++; }
+                 if(devObj && devObj.hasCommand("refresh")) { devObj.refresh(); count++; }
             }
         }
         return render(contentType: "application/json", data: "{ \"status\": \"ok\", \"count\": ${count} }")
@@ -755,8 +857,7 @@ def getHtml() {
         
         /* CHICKEN ADVISOR STYLES */
         .chicken-container {
-            position: fixed;
-            bottom: 20px;
+            position: fixed; bottom: 20px;
             right: 20px;
             z-index: 1500;
             display: flex;
@@ -766,15 +867,13 @@ def getHtml() {
         }
         
         .chicken-bubble {
-            background: white;
-            padding: 15px;
+            background: white; padding: 15px;
             border-radius: 15px 15px 0 15px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.15);
             margin-bottom: 10px;
             max-width: 250px;
             font-size: 14px;
-            font-weight: 700;
-            color: #444;
+            font-weight: 700; color: #444;
             opacity: 0;
             transform: translateY(10px);
             transition: all 0.5s ease;
@@ -782,13 +881,11 @@ def getHtml() {
         }
         
         .chicken-bubble.show {
-            opacity: 1;
-            transform: translateY(0);
+            opacity: 1; transform: translateY(0);
         }
         
         .chicken-emoji {
-            font-size: 60px;
-            cursor: pointer;
+            font-size: 60px; cursor: pointer;
             filter: drop-shadow(0 5px 5px rgba(0,0,0,0.2));
             transition: transform 0.2s;
             pointer-events: auto;
@@ -803,8 +900,7 @@ def getHtml() {
         }
         
         body.dark-mode .chicken-bubble {
-            background: #2d3436;
-            color: white;
+            background: #2d3436; color: white;
         }
 
         @media (max-width: 600px) {
@@ -1063,7 +1159,7 @@ def getHtml() {
             localStorage.setItem('shp_dark', document.body.classList.contains('dark-mode'));
         }
         if(localStorage.getItem('shp_dark') === 'true') document.body.classList.add('dark-mode');
-        
+
         function renderCritical(list) {
             const container = document.getElementById('critContainer');
             const listEl = document.getElementById('critList');
@@ -1257,7 +1353,7 @@ def getHtml() {
             }).catch(e => {
                 // FIX: Safe error handling
                 document.getElementById('userGrid').innerHTML = `<div style="grid-column:1/-1;text-align:center;color:red;padding:10px;">\${e.message || e}</div>`;
-            });
+             });
         }
         function showUserPicker() {
             document.getElementById('modalMain').classList.add('hidden');
@@ -1267,7 +1363,7 @@ def getHtml() {
                 PULSE_USERS.forEach(u => { 
                     html += `<div class="user-chip" onclick="submitReplacement(\${u.id})" style="display:flex; align-items:center; justify-content:center; padding:15px;">
                                 <div class="user-name" style="font-size:1.1em; margin:0;">\${u.name}</div>
-                             </div>`; 
+                              </div>`; 
                 });
             } else {
                 html = "<div style='grid-column:1/-1;text-align:center;color:#777;padding:10px;'>No users found. Try Refreshing.</div>";
